@@ -4,7 +4,6 @@ import base64
 from datetime import datetime
 from fpdf import FPDF
 import io
-import urllib.parse
 from PIL import Image, ImageOps
 
 # --- CONFIGURAZIONE ---
@@ -34,6 +33,17 @@ def correggi_e_converti_foto(image_file):
         except Exception: return None
     return None
 
+def mostra_foto_base64(colonna, base64_str, titolo=""):
+    """Decodifica e mostra l'immagine in Streamlit senza errori di storage"""
+    if base64_str and "base64," in base64_str:
+        try:
+            img_data = base64.b64decode(base64_str.split("base64,")[1])
+            colonna.image(img_data, caption=titolo, use_container_width=True)
+        except:
+            colonna.error("Errore immagine")
+    else:
+        colonna.info(f"{titolo} assente")
+
 def get_prossimo_numero():
     try:
         res = supabase.table("contratti").select("numero_fattura").execute()
@@ -41,7 +51,7 @@ def get_prossimo_numero():
         return max(nums) + 1 if nums else 1
     except: return 1
 
-# --- GENERATORE XML ARUBA ---
+# --- GENERATORI (XML & PDF) ---
 def genera_xml_sdi(c):
     data_xml = datetime.now().strftime('%Y-%m-%d')
     cf = "00000000000" if c['codice_fiscale'] == "XXXXXXXXXXXXXXXX" else c['codice_fiscale']
@@ -77,7 +87,6 @@ def genera_xml_sdi(c):
 </p:FatturaElettronica>"""
     return xml.encode('utf-8')
 
-# --- GENERATORE FASCICOLO MULTA ---
 def genera_fascicolo_multa(c, v):
     pdf = FPDF()
     pdf.add_page()
@@ -85,35 +94,16 @@ def genera_fascicolo_multa(c, v):
     pdf.cell(0, 10, "DICHIARAZIONE DI RINOTIFICA", ln=True, align="C")
     pdf.ln(5)
     pdf.set_font("Arial", "", 11)
-    testo = f"""Al Comando Polizia Locale di {v['comune']}
-Oggetto: Rinotifica Verbale n. {v['num']} - Prot. {v['prot']}
-
-La sottoscritta BATTAGLIA MARIANNA, titolare della ditta {DITTA}, dichiara che il veicolo {c.get('modello','')} 
-targato {c['targa']}, in data {v['data']} era locato a:
-
-CLIENTE: {c['nome'].upper()} {c['cognome'].upper()}
-CF: {c['codice_fiscale'].upper()}
-RESIDENZA: {c.get('indirizzo','')}, {c.get('comune','')} ({c.get('cap','')})
-
-Si allega copia del contratto e dei documenti di identità."""
+    testo = f"Al Comando Polizia Locale di {v['comune']}\nOggetto: Rinotifica Verbale n. {v['num']} - Prot. {v['prot']}\n\nLa sottoscritta BATTAGLIA MARIANNA, titolare della ditta {DITTA}, dichiara che il veicolo {c.get('modello','')} targato {c['targa']}, in data {v['data']} era locato a:\n\nCLIENTE: {c['nome'].upper()} {c['cognome'].upper()}\nCF: {c['codice_fiscale'].upper()}\nRESIDENZA: {c.get('indirizzo','')}, {c.get('comune','')} ({c.get('cap','')})\n\nSi allega copia del contratto e dei documenti di identita'."
     pdf.multi_cell(0, 7, safe(testo))
     pdf.ln(10)
     pdf.cell(0, 10, "In fede, Marianna Battaglia", align="R")
 
-    # Allegati Immagini
-    allegati = [
-        ("foto_patente", "PATENTE FRONTE"),
-        ("foto_patente_retro", "PATENTE RETRO"),
-        ("firma", "CONTRATTO FIRMATO"),
-        ("verbale_multa", "COPIA VERBALE")
-    ]
-    
-    for chiave, titolo in allegati:
+    for chiave, titolo in [("foto_patente","PATENTE F"),("foto_patente_retro","PATENTE R"),("firma","CONTRATTO"),("verbale_multa","VERBALE")]:
         img_str = v.get("img_verbale") if chiave == "verbale_multa" else c.get(chiave)
         if img_str and "base64," in img_str:
             try:
-                raw_data = img_str.split("base64,")[1]
-                img_bytes = base64.b64decode(raw_data)
+                img_bytes = base64.b64decode(img_str.split("base64,")[1])
                 pdf.add_page()
                 pdf.set_font("Arial", "B", 12)
                 pdf.cell(0, 10, titolo, ln=True)
@@ -161,26 +151,25 @@ with t2:
                 cc.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}")
                 st.write("---")
                 c_img = st.columns(3)
-                for i, k in enumerate(["foto_patente", "foto_patente_retro", "firma"]):
-                    if r.get(k): c_img[i].image(r[k], use_container_width=True)
+                mostra_foto_base64(c_img[0], r.get("foto_patente"), "Fronte")
+                mostra_foto_base64(c_img[1], r.get("foto_patente_retro"), "Retro")
+                mostra_foto_base64(c_img[2], r.get("firma"), "Contratto")
 
 with t3:
     st.subheader("🚨 Gestione Multe")
     targa_m = st.text_input("Targa mezzo").upper()
     col1, col2 = st.columns(2)
-    comune_p = col1.text_input("Comune Polizia")
-    data_inf = col2.text_input("Data Infrazione")
-    verb_n = col1.text_input("Numero Verbale")
-    prot_n = col2.text_input("Protocollo")
+    com_p, dat_inf = col1.text_input("Comune Polizia"), col2.text_input("Data Infrazione")
+    v_n, p_n = col1.text_input("Numero Verbale"), col2.text_input("Protocollo")
     f_v = st.file_uploader("Carica Verbale")
     
     if st.button("📦 GENERA FASCICOLO"):
         res = supabase.table("contratti").select("*").eq("targa", targa_m).order("id", desc=True).execute()
         if res.data:
             c = res.data[0]
-            v = {"comune":comune_p, "data":data_inf, "num":verb_n, "prot":prot_n, "img_verbale": correggi_e_converti_foto(f_v)}
+            v = {"comune":com_p, "data":dat_inf, "num":v_n, "prot":p_n, "img_verbale": correggi_e_converti_foto(f_v)}
             try:
                 fascicolo = genera_fascicolo_multa(c, v)
-                st.download_button("📥 SCARICA PDF COMPLETO", fascicolo, f"Fascicolo_{targa_m}.pdf")
-            except: st.error("Errore PDF")
+                st.download_button("📥 SCARICA PDF", fascicolo, f"Fascicolo_{targa_m}.pdf")
+            except: st.error("Errore creazione PDF")
         else: st.error("Targa non trovata")
