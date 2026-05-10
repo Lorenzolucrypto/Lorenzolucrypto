@@ -21,6 +21,7 @@ supabase: Client = create_client(URL, KEY)
 
 # --- UTILITY ---
 def safe(t):
+    if t is None: return ""
     t = str(t).replace("&", " e ").replace("<", " ").replace(">", " ").replace('"', " ").replace("'", " ")
     return t.encode("latin-1", "replace").decode("latin-1").upper()
 
@@ -52,15 +53,20 @@ def get_prossimo_numero():
         return max(nums) + 1 if nums else 1
     except: return 1
 
-# --- GENERATORE XML (VERSIONE DEFINITIVA ANTI-SCARTO) ---
+# --- GENERATORE XML (CORREZIONE ERRORE CAP) ---
 def genera_xml_sdi(c, forza_straniero=False):
     data_xml = datetime.now().strftime('%Y-%m-%d')
     cf_originale = str(c.get('codice_fiscale', '')).upper().replace(" ", "")
     
-    # Parametri per stranieri o errori CF
+    # Validazione CAP: deve essere di 5 cifre. Se None o corto, mettiamo Forio 80075
+    cap_cliente = str(c.get('cap', '80075'))
+    if not cap_cliente or cap_cliente == 'None' or len(cap_cliente) != 5:
+        cap_cliente = "80075"
+
+    # Gestione Codice Fiscale
     if forza_straniero or cf_originale == "XXXXXXXXXXXXXXXX" or len(cf_originale) != 16:
-        riga_cf = "" # Rimuove totalmente il tag CodiceFiscale
-        nazione_cliente = "OO" # Codice nazione per stranieri/extra-UE
+        riga_cf = "" 
+        nazione_cliente = "OO" 
     else:
         riga_cf = f"<CodiceFiscale>{cf_originale}</CodiceFiscale>"
         nazione_cliente = "IT"
@@ -89,7 +95,7 @@ def genera_xml_sdi(c, forza_straniero=False):
             </DatiAnagrafici>
             <Sede>
                 <Indirizzo>{safe(c.get('indirizzo',''))}</Indirizzo>
-                <CAP>{c.get('cap','80075')}</CAP>
+                <CAP>{cap_cliente}</CAP>
                 <Comune>{safe(c.get('comune','FORIO'))}</Comune>
                 <Provincia>NA</Provincia>
                 <Nazione>{nazione_cliente}</Nazione>
@@ -114,7 +120,7 @@ def genera_fascicolo_multa(c, v):
     pdf.cell(0, 10, "DICHIARAZIONE DI RINOTIFICA", ln=True, align="C")
     pdf.ln(5)
     pdf.set_font("Arial", "", 11)
-    testo = f"Al Comando Polizia Locale di {v['comune']}\nOggetto: Rinotifica Verbale n. {v['num']} - Prot. {v['prot']}\n\nLa sottoscritta BATTAGLIA MARIANNA, titolare della ditta {DITTA}, dichiara che il veicolo {c.get('modello','')} targato {c['targa']}, in data {v['data']} era locato a:\n\nCLIENTE: {c['nome'].upper()} {c['cognome'].upper()}\nCF: {c['codice_fiscale'].upper()}\nRESIDENZA: {c.get('indirizzo','')}, {c.get('comune','')} ({c.get('cap','')})\n\nSi allega copia del contratto e dei documenti di identità."
+    testo = f"Al Comando Polizia Locale di {v['comune']}\nOggetto: Rinotifica Verbale n. {v['num']} - Prot. {v['prot']}\n\nLa sottoscritta BATTAGLIA MARIANNA, titolare della ditta {DITTA}, dichiara che il veicolo {c.get('modello','')} targato {c['targa']}, in data {v['data']} era locato a:\n\nCLIENTE: {c['nome'].upper()} {c['cognome'].upper()}\nCF: {c['codice_fiscale'].upper()}\nRESIDENZA: {c.get('indirizzo','')}, {c.get('comune','')} ({c.get('cap','')})\n\nSi allega copia del contratto e dei documenti di identita'."
     pdf.multi_cell(0, 7, safe(testo))
     pdf.ln(10)
     pdf.cell(0, 10, "In fede, Marianna Battaglia", align="R")
@@ -127,7 +133,7 @@ def genera_fascicolo_multa(c, v):
             except: continue
     return bytes(pdf.output(dest="S"))
 
-# --- APP INTERFACE ---
+# --- INTERFACCIA ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
 if "auth" not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
@@ -151,26 +157,23 @@ with t1:
             nf = get_prossimo_numero()
             d = {"nome":n,"cognome":cg,"codice_fiscale":cf,"indirizzo":ind,"comune":com,"cap":cap,"targa":tg,"modello":mod,"prezzo":prz,"pec":wa,"numero_fattura":nf,"data_inizio":datetime.now().strftime("%d/%m/%Y"),"foto_patente":correggi_e_converti_foto(f1),"foto_patente_retro":correggi_e_converti_foto(f2),"firma":correggi_e_converti_foto(f3)}
             supabase.table("contratti").insert(d).execute()
-            st.success(f"Archiviato con successo! Fattura n. {nf}")
+            st.success(f"Archiviato! Fattura n. {nf}")
 
 with t2:
-    cerca = st.text_input("🔍 Cerca per Targa o Cognome")
+    cerca = st.text_input("🔍 Cerca")
     res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("id", desc=True).execute()
     for r in res.data:
         if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
-            with st.expander(f"📄 {r['targa']} - {r['cognome']} (Fattura {r['numero_fattura']})"):
+            with st.expander(f"📄 {r['targa']} - {r['cognome']} ({r['numero_fattura']})"):
                 dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
                 rc = dati.data
-                
                 c_btn = st.columns(3)
-                c_btn[0].download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"std_{r['id']}")
-                c_btn[1].download_button("⚠️ Forza XML (Straniero)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}S.xml", key=f"for{r['id']}")
-                
+                c_btn[0].download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
+                c_btn[1].download_button("⚠️ Forza XML (No CF)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}S.xml", key=f"f{r['id']}")
                 num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
                 if num_wa:
                     msg = urllib.parse.quote(f"Ciao {rc['nome']}, grazie da {DITTA}!")
                     c_btn[2].link_button("💬 WhatsApp", f"https://wa.me/{num_wa}?text={msg}")
-                
                 st.write("---")
                 c_img = st.columns(3)
                 mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Fronte")
@@ -178,19 +181,17 @@ with t2:
                 mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
 
 with t3:
-    st.subheader("🚨 Sezione Multe")
-    targa_m = st.text_input("Inserisci Targa").upper()
+    st.subheader("🚨 Multe")
+    targa_m = st.text_input("Targa").upper()
     if targa_m:
         res = supabase.table("contratti").select("*").eq("targa", targa_m).order("id", desc=True).execute()
         if res.data:
             c = res.data[0]
             st.success(f"Trovato: {c['nome']} {c['cognome']}")
-            col1, col2 = st.columns(2)
-            com_p, dat_inf = col1.text_input("Comune Polizia Locale"), col2.text_input("Data Infrazione")
-            v_n, p_n = col1.text_input("Numero Verbale"), col2.text_input("Protocollo")
-            f_v = st.file_uploader("📸 Carica Foto Verbale")
-            if st.button("📦 GENERA PDF MULTE"):
+            c1, c2 = st.columns(2)
+            com_p, dat_inf = c1.text_input("Comune Polizia"), c2.text_input("Data Infrazione")
+            v_n, p_n = c1.text_input("Numero Verbale"), c2.text_input("Protocollo")
+            f_v = st.file_uploader("📸 Foto Verbale")
+            if st.button("📦 GENERA PDF"):
                 v = {"comune":com_p, "data":dat_inf, "num":v_n, "prot":p_n, "img_verbale": correggi_e_converti_foto(f_v)}
-                fascicolo = genera_fascicolo_multa(c, v)
-                st.download_button("📥 SCARICA PDF COMPLETO", fascicolo, f"Rinotifica_{targa_m}.pdf")
-                
+                st.download_button("📥 SCARICA", genera_fascicolo_multa(c, v), f"Multa_{targa_m}.pdf")
