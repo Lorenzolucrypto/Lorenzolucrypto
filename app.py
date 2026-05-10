@@ -6,6 +6,7 @@ from fpdf import FPDF
 import io
 import urllib.parse
 from PIL import Image, ImageOps
+import re
 
 # --- CONFIGURAZIONE ---
 DITTA = "BATTAGLIA RENT"
@@ -15,14 +16,15 @@ SEDE_CAP = "80075"
 SEDE_COMUNE = "Forio"
 SEDE_PROV = "NA"
 
-# Connessione Supabase
 URL = st.secrets["SUPABASE_URL"]
 KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(URL, KEY)
 
-# --- FUNZIONI DI UTILITÀ ---
-def safe(t): 
-    return str(t).encode("latin-1", "replace").decode("latin-1")
+# --- UTILITY ---
+def safe(t):
+    # Rimuove caratteri non standard che possono far scartare l'XML
+    t = str(t).replace("&", " e ").replace("<", " ").replace(">", " ").replace('"', " ").replace("'", " ")
+    return t.encode("latin-1", "replace").decode("latin-1")
 
 def correggi_e_converti_foto(image_file):
     if image_file is not None:
@@ -48,18 +50,26 @@ def mostra_foto_base64(colonna, base64_str, titolo=""):
 def get_prossimo_numero():
     try:
         res = supabase.table("contratti").select("numero_fattura").execute()
-        nums = []
-        for r in res.data:
-            val = r.get('numero_fattura')
-            if val is not None and str(val).isdigit():
-                nums.append(int(val))
+        nums = [int(r['numero_fattura']) for r in res.data if str(r['numero_fattura']).isdigit()]
         return max(nums) + 1 if nums else 1
     except: return 1
 
-# --- GENERATORI (XML & PDF) ---
-def genera_xml_sdi(c):
+# --- GENERATORE XML ---
+def genera_xml_sdi(c, forza_senza_cf=False):
     data_xml = datetime.now().strftime('%Y-%m-%d')
-    cf = "00000000000" if c['codice_fiscale'] == "XXXXXXXXXXXXXXXX" else c['codice_fiscale']
+    cf_originale = str(c.get('codice_fiscale', '')).upper().replace(" ", "")
+    
+    # Se forziamo o se il CF non è di 16 caratteri (italiano), lo togliamo del tutto
+    riga_cf = ""
+    if not forza_senza_cf and len(cf_originale) == 16 and cf_originale != "XXXXXXXXXXXXXXXX":
+        riga_cf = f"<CodiceFiscale>{cf_originale}</CodiceFiscale>"
+    
+    # Pulizia nomi per XML
+    nome_p = safe(c['nome']).upper()
+    cognome_p = safe(c['cognome']).upper()
+    ind_p = safe(c.get('indirizzo','')).upper()
+    com_p = safe(c.get('comune','FORIO')).upper()
+
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <p:FatturaElettronica versione="FPR12" xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
     <FatturaElettronicaHeader>
@@ -78,8 +88,17 @@ def genera_xml_sdi(c):
             <Sede><Indirizzo>{SEDE_VIA}</Indirizzo><CAP>{SEDE_CAP}</CAP><Comune>{SEDE_COMUNE}</Comune><Provincia>{SEDE_PROV}</Provincia><Nazione>IT</Nazione></Sede>
         </CedentePrestatore>
         <CessionarioCommittente>
-            <DatiAnagrafici><CodiceFiscale>{cf}</CodiceFiscale><Anagrafica><Nome>{c['nome']}</Nome><Cognome>{c['cognome']}</Cognome></Anagrafica></DatiAnagrafici>
-            <Sede><Indirizzo>{c.get('indirizzo','')}</Indirizzo><CAP>{c.get('cap','80075')}</CAP><Comune>{c.get('comune','Forio')}</Comune><Provincia>NA</Provincia><Nazione>IT</Nazione></Sede>
+            <DatiAnagrafici>
+                {riga_cf}
+                <Anagrafica><Nome>{nome_p}</Nome><Cognome>{cognome_p}</Cognome></Anagrafica>
+            </DatiAnagrafici>
+            <Sede>
+                <Indirizzo>{ind_p}</Indirizzo>
+                <CAP>{c.get('cap','80075')}</CAP>
+                <Comune>{com_p}</Comune>
+                <Provincia>NA</Provincia>
+                <Nazione>IT</Nazione>
+            </Sede>
         </CessionarioCommittente>
     </FatturaElettronicaHeader>
     <FatturaElettronicaBody>
@@ -92,6 +111,7 @@ def genera_xml_sdi(c):
 </p:FatturaElettronica>"""
     return xml.encode('utf-8')
 
+# --- PDF MULTE ---
 def genera_fascicolo_multa(c, v):
     pdf = FPDF()
     pdf.add_page()
@@ -99,26 +119,21 @@ def genera_fascicolo_multa(c, v):
     pdf.cell(0, 10, "DICHIARAZIONE DI RINOTIFICA", ln=True, align="C")
     pdf.ln(5)
     pdf.set_font("Arial", "", 11)
-    testo = f"Al Comando Polizia Locale di {v['comune']}\nOggetto: Rinotifica Verbale n. {v['num']} - Prot. {v['prot']}\n\nLa sottoscritta BATTAGLIA MARIANNA, titolare della ditta {DITTA}, dichiara che il veicolo {c.get('modello','')} targato {c['targa']}, in data {v['data']} era locato a:\n\nCLIENTE: {c['nome'].upper()} {c['cognome'].upper()}\nCF: {c['codice_fiscale'].upper()}\nRESIDENZA: {c.get('indirizzo','')}, {c.get('comune','')} ({c.get('cap','')})\n\nSi allega copia del contratto e dei documenti di identità."
+    testo = f"Al Comando Polizia Locale di {v['comune']}\nOggetto: Rinotifica Verbale n. {v['num']} - Prot. {v['prot']}\n\nLa sottoscritta BATTAGLIA MARIANNA, titolare della ditta {DITTA}, dichiara che il veicolo {c.get('modello','')} targato {c['targa']}, in data {v['data']} era locato a:\n\nCLIENTE: {c['nome'].upper()} {c['cognome'].upper()}\nCF: {c['codice_fiscale'].upper()}\nRESIDENZA: {c.get('indirizzo','')}, {c.get('comune','')} ({c.get('cap','')})\n\nSi allega copia del contratto e dei documenti di identita'."
     pdf.multi_cell(0, 7, safe(testo))
     pdf.ln(10)
     pdf.cell(0, 10, "In fede, Marianna Battaglia", align="R")
-
-    for chiave, titolo in [("foto_patente","PATENTE F"),("foto_patente_retro","PATENTE R"),("firma","CONTRATTO"),("verbale_multa","VERBALE")]:
-        img_str = v.get("img_verbale") if chiave == "verbale_multa" else c.get(chiave)
-        if img_str and "base64," in img_str:
+    for k, t in [("foto_patente","PATENTE F"),("foto_patente_retro","PATENTE R"),("firma","CONTRATTO"),("verbale_multa","VERBALE")]:
+        img = v.get("img_verbale") if k == "verbale_multa" else c.get(k)
+        if img and "base64," in img:
             try:
-                img_bytes = base64.b64decode(img_str.split("base64,")[1])
-                pdf.add_page()
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, titolo, ln=True)
-                pdf.image(io.BytesIO(img_bytes), x=10, w=180)
+                pdf.add_page(); pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, t, ln=True)
+                pdf.image(io.BytesIO(base64.b64decode(img.split("base64,")[1])), x=10, w=180)
             except: continue
     return bytes(pdf.output(dest="S"))
 
-# --- INTERFACCIA APP ---
+# --- INTERFACCIA ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
-
 if "auth" not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
     pwd = st.text_input("Password", type="password")
@@ -131,53 +146,41 @@ t1, t2, t3 = st.tabs(["📝 NUOVO", "📂 ARCHIVIO", "🚨 MULTE"])
 with t1:
     with st.form("f"):
         c1, c2 = st.columns(2)
-        n, cg = c1.text_input("Nome"), c2.text_input("Cognome")
-        cf = st.text_input("Codice Fiscale")
+        n, cg, cf = c1.text_input("Nome"), c2.text_input("Cognome"), st.text_input("Codice Fiscale")
         ind, wa = st.text_input("Indirizzo"), st.text_input("WhatsApp")
         com, cap = c1.text_input("Comune", "Forio"), c2.text_input("CAP", "80075")
         tg, mod = c1.text_input("Targa").upper(), c2.text_input("Modello")
         prz = st.number_input("Prezzo €", 0.0)
         f1, f2, f3 = st.file_uploader("Patente F"), st.file_uploader("Patente R"), st.file_uploader("Contratto")
-        if st.form_submit_button("SALVA CONTRATTO"):
+        if st.form_submit_button("SALVA"):
             nf = get_prossimo_numero()
-            d = {
-                "nome": n, "cognome": cg, "codice_fiscale": cf, "indirizzo": ind, 
-                "comune": com, "cap": cap, "targa": tg, "modello": mod, 
-                "prezzo": prz, "pec": wa, "numero_fattura": nf, 
-                "data_inizio": datetime.now().strftime("%d/%m/%Y"),
-                "foto_patente": correggi_e_converti_foto(f1),
-                "foto_patente_retro": correggi_e_converti_foto(f2),
-                "firma": correggi_e_converti_foto(f3)
-            }
+            d = {"nome":n,"cognome":cg,"codice_fiscale":cf,"indirizzo":ind,"comune":com,"cap":cap,"targa":tg,"modello":mod,"prezzo":prz,"pec":wa,"numero_fattura":nf,"data_inizio":datetime.now().strftime("%d/%m/%Y"),"foto_patente":correggi_e_converti_foto(f1),"foto_patente_retro":correggi_e_converti_foto(f2),"firma":correggi_e_converti_foto(f3)}
             supabase.table("contratti").insert(d).execute()
-            st.success(f"Archiviato! Numero Fattura: {nf}")
+            st.success(f"Archiviato! Fattura n. {nf}")
 
 with t2:
-    cerca = st.text_input("🔍 Cerca (Targa o Cognome)")
-    try:
-        # Carichiamo solo i dati testuali per evitare errori API
-        res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("id", desc=True).execute()
-        for r in res.data:
-            if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
-                with st.expander(f"📄 {r['targa']} - {r['cognome']} (Fattura: {r.get('numero_fattura', 'N/D')})"):
-                    # Carichiamo i dati completi (incluse foto) solo se l'expander viene aperto
-                    dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
-                    rc = dati.data
-                    
-                    ca, cc = st.columns(2)
-                    ca.download_button("📩 XML Aruba", genera_xml_sdi(rc), f"{rc.get('numero_fattura','0')}.xml", key=f"xml_{rc['id']}")
-                    
-                    num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
-                    if num_wa:
-                        msg = urllib.parse.quote(f"Ciao {rc['nome']}, grazie per aver scelto {DITTA}! Ti inviamo il riepilogo per lo scooter {rc['targa']}.")
-                        cc.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}?text={msg}")
-                    
-                    st.write("---")
-                    c_img = st.columns(3)
-                    mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Fronte")
-                    mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Retro")
-                    mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
-    except: st.error("Database occupato o RLS attiva.")
+    cerca = st.text_input("🔍 Cerca")
+    res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("id", desc=True).execute()
+    for r in res.data:
+        if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
+            with st.expander(f"📄 {r['targa']} - {r['cognome']}"):
+                dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
+                rc = dati.data
+                c_btn = st.columns(3)
+                # Tasto normale
+                c_btn[0].download_button("📩 XML Aruba", genera_xml_sdi(rc), f"{rc['numero_fattura']}.xml", key=f"x1_{r['id']}")
+                # Tasto di emergenza (Senza CF)
+                c_btn[1].download_button("⚠️ Forza XML (Senza CF)", genera_xml_sdi(rc, True), f"{rc['numero_fattura']}S.xml", key=f"x2{r['id']}")
+                
+                num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
+                if num_wa:
+                    msg = urllib.parse.quote(f"Ciao {rc['nome']}, grazie per aver scelto {DITTA}!")
+                    c_btn[2].link_button("💬 WhatsApp", f"https://wa.me/{num_wa}?text={msg}")
+                st.write("---")
+                c_img = st.columns(3)
+                mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Fronte")
+                mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Retro")
+                mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
 
 with t3:
     st.subheader("🚨 Gestione Multe")
@@ -186,24 +189,12 @@ with t3:
         res = supabase.table("contratti").select("*").eq("targa", targa_m).order("id", desc=True).execute()
         if res.data:
             c = res.data[0]
-            st.success(f"Targa trovata: {c['nome']} {c['cognome']}")
-            exp_pre = st.expander("👁️ Anteprima documenti cliente")
-            with exp_pre:
-                p1, p2, p3 = st.columns(3)
-                mostra_foto_base64(p1, c.get("foto_patente"), "Patente F")
-                mostra_foto_base64(p2, c.get("foto_patente_retro"), "Patente R")
-                mostra_foto_base64(p3, c.get("firma"), "Contratto")
-            
-            st.write("---")
+            st.success(f"Trovato: {c['nome']} {c['cognome']}")
             col1, col2 = st.columns(2)
             com_p, dat_inf = col1.text_input("Comune Polizia"), col2.text_input("Data Infrazione")
             v_n, p_n = col1.text_input("Numero Verbale"), col2.text_input("Protocollo")
             f_v = st.file_uploader("📸 Foto Verbale")
-            
             if st.button("📦 GENERA FASCICOLO"):
                 v = {"comune":com_p, "data":dat_inf, "num":v_n, "prot":p_n, "img_verbale": correggi_e_converti_foto(f_v)}
-                try:
-                    fascicolo = genera_fascicolo_multa(c, v)
-                    st.download_button("📥 SCARICA PDF", fascicolo, f"Fascicolo_{targa_m}.pdf")
-                except: st.error("Errore durante la creazione del PDF.")
-        else: st.warning("Targa non trovata nell'archivio.")
+                fascicolo = genera_fascicolo_multa(c, v)
+                st.download_button("📥 SCARICA PDF", fascicolo, f"Multa_{targa_m}.pdf")
