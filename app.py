@@ -23,7 +23,7 @@ supabase: Client = create_client(URL, KEY)
 # --- UTILITY ---
 def safe(t):
     if t is None or str(t).strip() == "" or str(t).lower() == "none": 
-        return "FORIO"
+        return "NON INDICATO"
     t = str(t).replace("&", " e ").replace("<", " ").replace(">", " ").replace('"', " ").replace("'", " ")
     return t.encode("latin-1", "replace").decode("latin-1").upper()
 
@@ -55,15 +55,21 @@ def get_prossimo_numero():
         return max(nums) + 1 if nums else 1
     except: return 1
 
-# --- GENERATORE XML (CORREZIONE ERRORE 00417) ---
+# --- GENERATORE XML (SCORPORO IVA + FIX SCARTI) ---
 def genera_xml_sdi(c, forza_straniero=False):
     data_xml = datetime.now().strftime('%Y-%m-%d')
     cf_originale = str(c.get('codice_fiscale', '')).upper().replace(" ", "")
     
-    # Se forziamo o se il CF non è valido (16 caratteri), usiamo le 16 X (Standard SDI per stranieri)
+    # CALCOLO SCORPORO IVA (Se inserisci 40, l'imponibile diventa 32.79)
+    prezzo_totale = float(c.get('prezzo', 0))
+    imponibile = round(prezzo_totale / 1.22, 2)
+    imposta = round(prezzo_totale - imponibile, 2)
+
+    # GESTIONE ANAGRAFICA PER EVITARE SCARTI
     if forza_straniero or len(cf_originale) != 16:
-        cf_da_inserire = "XXXXXXXXXXXXXXXX"
-        nazione_cliente = "OO" # Nazione generica per stranieri
+        # Per gli stranieri usiamo 11 zeri e nazione OO (standard compatibile Aruba/SDI)
+        cf_da_inserire = "00000000000" 
+        nazione_cliente = "OO"
     else:
         cf_da_inserire = cf_originale
         nazione_cliente = "IT"
@@ -107,14 +113,25 @@ def genera_xml_sdi(c, forza_straniero=False):
     <FatturaElettronicaBody>
         <DatiGenerali><DatiGeneraliDocumento><TipoDocumento>TD01</TipoDocumento><Divisa>EUR</Divisa><Data>{data_xml}</Data><Numero>{c.get('numero_fattura', '1')}</Numero></DatiGeneraliDocumento></DatiGenerali>
         <DatiBeniServizi>
-            <DettaglioLinee><NumeroLinea>1</NumeroLinea><Descrizione>Noleggio scooter {c['targa']}</Descrizione><PrezzoUnitario>{c['prezzo']:.2f}</PrezzoUnitario><PrezzoTotale>{c['prezzo']:.2f}</PrezzoTotale><AliquotaIVA>22.00</AliquotaIVA></DettaglioLinee>
-            <DatiRiepilogo><AliquotaIVA>22.00</AliquotaIVA><ImponibileImporto>{c['prezzo']:.2f}</ImponibileImporto><Imposta>{(c['prezzo']*0.22):.2f}</Imposta></DatiRiepilogo>
+            <DettaglioLinee>
+                <NumeroLinea>1</NumeroLinea>
+                <Descrizione>Noleggio scooter {c['targa']}</Descrizione>
+                <PrezzoUnitario>{imponibile:.2f}</PrezzoUnitario>
+                <PrezzoTotale>{imponibile:.2f}</PrezzoTotale>
+                <AliquotaIVA>22.00</AliquotaIVA>
+            </DettaglioLinee>
+            <DatiRiepilogo>
+                <AliquotaIVA>22.00</AliquotaIVA>
+                <ImponibileImporto>{imponibile:.2f}</ImponibileImporto>
+                <Imposta>{imposta:.2f}</Imposta>
+                <EsigibilitaIVA>I</EsigibilitaIVA>
+            </DatiRiepilogo>
         </DatiBeniServizi>
     </FatturaElettronicaBody>
 </p:FatturaElettronica>"""
     return xml.encode('utf-8')
 
-# --- ARCHIVIO E INTERFACCIA (INVARIATI) ---
+# --- INTERFACCIA (RESTA UGUALE) ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
 if "auth" not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
@@ -132,7 +149,7 @@ with t1:
         ind, wa = st.text_input("Indirizzo"), st.text_input("WhatsApp")
         com, cap = c1.text_input("Comune", "Forio"), c2.text_input("CAP", "80075")
         tg, mod = c1.text_input("Targa").upper(), c2.text_input("Modello")
-        prz = st.number_input("Prezzo €", 0.0)
+        prz = st.number_input("Prezzo TOTALE (IVA inclusa) €", 0.0)
         f1, f2, f3 = st.file_uploader("Patente F"), st.file_uploader("Patente R"), st.file_uploader("Contratto")
         if st.form_submit_button("SALVA CONTRATTO"):
             nf = get_prossimo_numero()
@@ -150,7 +167,7 @@ with t2:
                 rc = dati.data
                 c_btn = st.columns(3)
                 c_btn[0].download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
-                c_btn[1].download_button("⚠️ Forza XML (Straniero)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}S.xml", key=f"f{r['id']}")
+                c_btn[1].download_button("⚠️ Forza XML (Straniero/Fix)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}S.xml", key=f"f{r['id']}")
                 num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
                 if num_wa:
                     msg = urllib.parse.quote(f"Ciao {rc['nome']}, grazie da {DITTA}!")
@@ -162,8 +179,8 @@ with t2:
                 mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
 
 with t3:
-    st.subheader("🚨 Multe")
-    targa_m = st.text_input("Targa").upper()
+    st.subheader("🚨 Sezione Multe")
+    targa_m = st.text_input("Targa mezzo").upper()
     if targa_m:
         res = supabase.table("contratti").select("*").eq("targa", targa_m).order("id", desc=True).execute()
         if res.data:
@@ -173,13 +190,11 @@ with t3:
             com_p, dat_inf = c1.text_input("Comune Polizia"), c2.text_input("Data Infrazione")
             v_n, p_n = c1.text_input("Numero Verbale"), c2.text_input("Protocollo")
             f_v = st.file_uploader("📸 Foto Verbale")
-            if st.button("📦 GENERA PDF"):
-                # Qui usiamo safe per evitare errori nelle multe
-                pdf_multa = FPDF()
-                pdf_multa.add_page()
-                pdf_multa.set_font("Arial", "B", 14)
-                pdf_multa.cell(0, 10, "DICHIARAZIONE DI RINOTIFICA", ln=True, align="C")
-                testo = f"Al Comando Polizia Locale di {com_p}\nIn data {dat_inf} il veicolo {c['targa']} era locato a {c['nome']} {c['cognome']}."
-                pdf_multa.set_font("Arial", "", 11)
-                pdf_multa.multi_cell(0, 10, safe(testo))
-                st.download_button("📥 SCARICA PDF", bytes(pdf_multa.output(dest="S")), f"Multa_{targa_m}.pdf")
+            if st.button("📦 GENERA FASCICOLO"):
+                pdf = FPDF()
+                pdf.add_page()
+                pdf.set_font("Arial", "B", 14)
+                pdf.cell(0, 10, "DICHIARAZIONE RINOTIFICA", ln=True, align="C")
+                pdf.set_font("Arial", "", 11)
+                pdf.multi_cell(0, 10, safe(f"Verbale: {v_n}\nTarga: {targa_m}\nCliente: {c['nome']} {c['cognome']}"))
+                st.download_button("📥 Scarica", bytes(pdf.output(dest="S")), f"Multa_{targa_m}.pdf")
