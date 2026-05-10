@@ -21,7 +21,8 @@ supabase: Client = create_client(URL, KEY)
 
 # --- UTILITY ---
 def safe(t):
-    if t is None: return ""
+    if t is None or str(t).strip() == "" or str(t).lower() == "none": 
+        return "FORIO" # Protezione per campi vuoti
     t = str(t).replace("&", " e ").replace("<", " ").replace(">", " ").replace('"', " ").replace("'", " ")
     return t.encode("latin-1", "replace").decode("latin-1").upper()
 
@@ -53,15 +54,20 @@ def get_prossimo_numero():
         return max(nums) + 1 if nums else 1
     except: return 1
 
-# --- GENERATORE XML (CORREZIONE ERRORE CAP) ---
+# --- GENERATORE XML (CORREZIONE ERRORE COMUNE E CAP) ---
 def genera_xml_sdi(c, forza_straniero=False):
     data_xml = datetime.now().strftime('%Y-%m-%d')
     cf_originale = str(c.get('codice_fiscale', '')).upper().replace(" ", "")
     
-    # Validazione CAP: deve essere di 5 cifre. Se None o corto, mettiamo Forio 80075
-    cap_cliente = str(c.get('cap', '80075'))
+    # Validazione CAP: deve essere di 5 cifre.
+    cap_cliente = str(c.get('cap', '80075')).strip()
     if not cap_cliente or cap_cliente == 'None' or len(cap_cliente) != 5:
         cap_cliente = "80075"
+
+    # Validazione COMUNE: se vuoto mettiamo FORIO
+    comune_cliente = safe(c.get('comune', 'FORIO'))
+    if comune_cliente == "" or comune_cliente == "NONE":
+        comune_cliente = "FORIO"
 
     # Gestione Codice Fiscale
     if forza_straniero or cf_originale == "XXXXXXXXXXXXXXXX" or len(cf_originale) != 16:
@@ -94,9 +100,9 @@ def genera_xml_sdi(c, forza_straniero=False):
                 <Anagrafica><Nome>{safe(c['nome'])}</Nome><Cognome>{safe(c['cognome'])}</Cognome></Anagrafica>
             </DatiAnagrafici>
             <Sede>
-                <Indirizzo>{safe(c.get('indirizzo',''))}</Indirizzo>
+                <Indirizzo>{safe(c.get('indirizzo','VIA COGNOLE'))}</Indirizzo>
                 <CAP>{cap_cliente}</CAP>
-                <Comune>{safe(c.get('comune','FORIO'))}</Comune>
+                <Comune>{comune_cliente}</Comune>
                 <Provincia>NA</Provincia>
                 <Nazione>{nazione_cliente}</Nazione>
             </Sede>
@@ -161,24 +167,26 @@ with t1:
 
 with t2:
     cerca = st.text_input("🔍 Cerca")
-    res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("id", desc=True).execute()
-    for r in res.data:
-        if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
-            with st.expander(f"📄 {r['targa']} - {r['cognome']} ({r['numero_fattura']})"):
-                dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
-                rc = dati.data
-                c_btn = st.columns(3)
-                c_btn[0].download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
-                c_btn[1].download_button("⚠️ Forza XML (No CF)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}S.xml", key=f"f{r['id']}")
-                num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
-                if num_wa:
-                    msg = urllib.parse.quote(f"Ciao {rc['nome']}, grazie da {DITTA}!")
-                    c_btn[2].link_button("💬 WhatsApp", f"https://wa.me/{num_wa}?text={msg}")
-                st.write("---")
-                c_img = st.columns(3)
-                mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Fronte")
-                mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Retro")
-                mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
+    try:
+        res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("id", desc=True).execute()
+        for r in res.data:
+            if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
+                with st.expander(f"📄 {r['targa']} - {r['cognome']} ({r['numero_fattura']})"):
+                    dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
+                    rc = dati.data
+                    c_btn = st.columns(3)
+                    c_btn[0].download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
+                    c_btn[1].download_button("⚠️ Forza XML (No CF)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}S.xml", key=f"f{r['id']}")
+                    num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
+                    if num_wa:
+                        msg = urllib.parse.quote(f"Ciao {rc['nome']}, grazie da {DITTA}!")
+                        c_btn[2].link_button("💬 WhatsApp", f"https://wa.me/{num_wa}?text={msg}")
+                    st.write("---")
+                    c_img = st.columns(3)
+                    mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Fronte")
+                    mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Retro")
+                    mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
+    except: st.error("Errore nel recupero dati.")
 
 with t3:
     st.subheader("🚨 Multe")
