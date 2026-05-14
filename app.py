@@ -1,4 +1,3 @@
-
 import streamlit as st
 from supabase import create_client, Client
 import base64
@@ -44,15 +43,14 @@ def mostra_foto_base64(colonna, base64_str, titolo=""):
             img_data = base64.b64decode(base64_str.split("base64,")[1])
             colonna.image(img_data, caption=titolo, use_container_width=True)
         except:
-            colonna.error(f"Errore caricamento {titolo}")
+            colonna.error(f"Errore {titolo}")
     else:
-        colonna.info(f"{titolo} non presente")
+        colonna.info(f"{titolo} assente")
 
 def get_prossimo_numero():
     try:
         res = supabase.table("contratti").select("numero_fattura").order("numero_fattura", desc=True).limit(1).execute()
-        if res.data:
-            return int(res.data[0]['numero_fattura']) + 1
+        if res.data: return int(res.data[0]['numero_fattura']) + 1
         return 1
     except: return 1
 
@@ -65,15 +63,11 @@ def genera_xml_sdi(c, forza_straniero=False):
     imposta = round(prezzo_totale - imponibile, 2)
 
     if forza_straniero or len(cf_originale) != 16:
-        cf_blocco = "<CodiceFiscale>00000000000</CodiceFiscale>"
-        nazione_blocco = "OO"
-        cap_blocco = "00000"
+        cf_blocco, nazione_blocco, cap_blocco = "<CodiceFiscale>00000000000</CodiceFiscale>", "OO", "00000"
     else:
-        cf_blocco = f"<CodiceFiscale>{cf_originale}</CodiceFiscale>"
-        nazione_blocco = "IT"
-        cap_blocco = str(c.get('cap', '80075'))[:5]
+        cf_blocco, nazione_blocco, cap_blocco = f"<CodiceFiscale>{cf_originale}</CodiceFiscale>", "IT", str(c.get('cap', '80075'))[:5]
 
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <p:FatturaElettronica versione="FPR12" xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
     <FatturaElettronicaHeader>
         <DatiTrasmissione>
@@ -95,34 +89,70 @@ def genera_xml_sdi(c, forza_straniero=False):
                 {cf_blocco}
                 <Anagrafica><Nome>{safe(c['nome'])}</Nome><Cognome>{safe(c['cognome'])}</Cognome></Anagrafica>
             </DatiAnagrafici>
-            <Sede>
-                <Indirizzo>{safe(c.get('indirizzo','VIA COGNOLE'))}</Indirizzo>
-                <CAP>{cap_blocco}</CAP>
-                <Comune>{safe(c.get('comune','FORIO'))}</Comune>
-                <Nazione>{nazione_blocco}</Nazione>
-            </Sede>
+            <Sede><Indirizzo>{safe(c.get('indirizzo','VIA COGNOLE'))}</Indirizzo><CAP>{cap_blocco}</CAP><Comune>{safe(c.get('comune','FORIO'))}</Comune><Nazione>{nazione_blocco}</Nazione></Sede>
         </CessionarioCommittente>
     </FatturaElettronicaHeader>
     <FatturaElettronicaBody>
         <DatiGenerali><DatiGeneraliDocumento><TipoDocumento>TD01</TipoDocumento><Divisa>EUR</Divisa><Data>{data_xml}</Data><Numero>{c.get('numero_fattura', '1')}</Numero></DatiGeneraliDocumento></DatiGenerali>
         <DatiBeniServizi>
-            <DettaglioLinee>
-                <NumeroLinea>1</NumeroLinea>
-                <Descrizione>Noleggio scooter {c.get('targa', 'NA')}</Descrizione>
-                <PrezzoUnitario>{imponibile:.2f}</PrezzoUnitario>
-                <PrezzoTotale>{imponibile:.2f}</PrezzoTotale>
-                <AliquotaIVA>22.00</AliquotaIVA>
-            </DettaglioLinee>
-            <DatiRiepilogo>
-                <AliquotaIVA>22.00</AliquotaIVA>
-                <ImponibileImporto>{imponibile:.2f}</ImponibileImporto>
-                <Imposta>{imposta:.2f}</Imposta>
-                <EsigibilitaIVA>I</EsigibilitaIVA>
-            </DatiRiepilogo>
+            <DettaglioLinee><NumeroLinea>1</NumeroLinea><Descrizione>Noleggio scooter {c.get('targa', 'NA')}</Descrizione><PrezzoUnitario>{imponibile:.2f}</PrezzoUnitario><PrezzoTotale>{imponibile:.2f}</PrezzoTotale><AliquotaIVA>22.00</AliquotaIVA></DettaglioLinee>
+            <DatiRiepilogo><AliquotaIVA>22.00</AliquotaIVA><ImponibileImporto>{imponibile:.2f}</ImponibileImporto><Imposta>{imposta:.2f}</Imposta><EsigibilitaIVA>I</EsigibilitaIVA></DatiRiepilogo>
         </DatiBeniServizi>
     </FatturaElettronicaBody>
-</p:FatturaElettronica>"""
-    return xml.encode('utf-8')
+</p:FatturaElettronica>""".encode('utf-8')
+
+# --- GENERATORE PDF MULTA ---
+def genera_pdf_multe(contratto, v_n, p_n, com_p, data_inf, foto_verbale):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Pagina 1: Dati e Testo
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "COMUNICAZIONE DATI CONDUCENTE / RINOTIFICA", ln=True, align="C")
+    pdf.ln(10)
+    
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "DATI VERBALE:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 8, f"Verbale N: {v_n}\nProtocollo: {p_n}\nComune: {com_p}\nData Infrazione: {data_inf}")
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "DATI NOLEGGIATORE (BATTAGLIA RENT):", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 8, f"Targa Veicolo: {contratto['targa']}\nModello: {contratto['modello']}")
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "DATI CONDUCENTE:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 8, f"Nome e Cognome: {contratto['nome']} {contratto['cognome']}\nCodice Fiscale: {contratto['codice_fiscale']}\nIndirizzo: {contratto['indirizzo']}, {contratto['comune']} ({contratto['cap']})")
+    
+    # Aggiunta Foto nel PDF
+    def add_b64_img(b64_str, titolo):
+        if b64_str and "base64," in b64_str:
+            try:
+                pdf.add_page()
+                pdf.set_font("Arial", "B", 12)
+                pdf.cell(0, 10, titolo, ln=True)
+                header, data = b64_str.split("base64,")
+                img_data = base64.b64decode(data)
+                img_io = io.BytesIO(img_data)
+                pdf.image(img_io, x=10, y=30, w=180)
+            except: pass
+
+    add_b64_img(contratto.get("foto_patente"), "PATENTE FRONTE")
+    add_b64_img(contratto.get("foto_patente_retro"), "PATENTE RETRO")
+    add_b64_img(contratto.get("firma"), "CONTRATTO FIRMATO")
+    
+    if foto_verbale:
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 10, "FOTO VERBALE", ln=True)
+        pdf.image(foto_verbale, x=10, y=30, w=180)
+
+    return pdf.output(dest="S").encode("latin-1")
 
 # --- INTERFACCIA ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
@@ -138,64 +168,50 @@ t1, t2, t3 = st.tabs(["📝 NUOVO", "📂 ARCHIVIO", "🚨 MULTE"])
 with t1:
     with st.form("f"):
         c1, c2 = st.columns(2)
-        n = c1.text_input("Nome")
-        cg = c2.text_input("Cognome")
-        cf = st.text_input("Codice Fiscale")
-        ind = st.text_input("Indirizzo di residenza")
+        n, cg, cf = c1.text_input("Nome"), c2.text_input("Cognome"), st.text_input("Codice Fiscale")
+        ind, wa = st.text_input("Indirizzo"), st.text_input("WhatsApp")
         c3, c4 = st.columns(2)
-        com = c3.text_input("Comune", "Forio")
-        cap = c4.text_input("CAP", "80075")
-        wa = st.text_input("Numero WhatsApp (per invio contratto)")
-        st.write("---")
-        c5, c6 = st.columns(2)
-        tg = c5.text_input("Targa").upper()
-        mod = c6.text_input("Modello Scooter")
-        prz = st.number_input("Totale Incassato € (IVA inclusa)", 0.0)
-        st.write("---")
-        f1 = st.file_uploader("Foto Patente Fronte")
-        f2 = st.file_uploader("Foto Patente Retro")
-        f3 = st.file_uploader("Foto Contratto Firmato")
-        
-        if st.form_submit_button("💾 SALVA CONTRATTO"):
+        com, cap = c3.text_input("Comune", "Forio"), c4.text_input("CAP", "80075")
+        tg, mod = c3.text_input("Targa").upper(), c4.text_input("Modello")
+        prz = st.number_input("Totale €", 0.0)
+        f1, f2, f3 = st.file_uploader("Patente F"), st.file_uploader("Patente R"), st.file_uploader("Contratto")
+        if st.form_submit_button("💾 SALVA"):
             nf = get_prossimo_numero()
             d = {"nome":n,"cognome":cg,"codice_fiscale":cf,"indirizzo":ind,"comune":com,"cap":cap,"targa":tg,"modello":mod,"prezzo":prz,"pec":wa,"numero_fattura":nf,"data_inizio":datetime.now().strftime("%d/%m/%Y"),"foto_patente":correggi_e_converti_foto(f1),"foto_patente_retro":correggi_e_converti_foto(f2),"firma":correggi_e_converti_foto(f3)}
             supabase.table("contratti").insert(d).execute()
-            st.success(f"Salvato con successo! Numero fattura assegnato: {nf}")
+            st.success(f"Salvato! Fattura n. {nf}")
 
 with t2:
-    cerca = st.text_input("🔍 Cerca per targa o cognome")
-    res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("numero_fattura", desc=True).execute()
-    for r in res.data:
-        if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
-            with st.expander(f"📄 Fattura {r['numero_fattura']} - {r['nome']} {r['cognome']} ({r['targa']})"):
-                # Recupero tutti i dati per le foto
-                dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
-                rc = dati.data
-                
-                col_btn1, col_btn2 = st.columns(2)
-                col_btn1.download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
-                col_btn2.download_button("🚨 XML FIX (Emergenza)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}FIX.xml", key=f"f{r['id']}")
-                
-                st.write(f"*Indirizzo:* {rc.get('indirizzo','')}, {rc.get('comune','')} ({rc.get('cap','')})")
-                st.write(f"*Codice Fiscale:* {rc.get('codice_fiscale','')}")
-                
-                num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
-                if num_wa:
-                    st.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}")
-                
-                st.write("---")
-                # Sezione Foto
-                st.subheader("Immagini caricate")
+    cerca = st.text_input("🔍 Cerca")
+    res = supabase.table("contratti").select("*").order("numero_fattura", desc=True).execute()
+    for rc in res.data:
+        if cerca.lower() in f"{rc['targa']} {rc['cognome']}".lower():
+            with st.expander(f"📄 Fat. {rc['numero_fattura']} - {rc['nome']} {rc['cognome']} ({rc['targa']})"):
+                b1, b2 = st.columns(2)
+                b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml")
+                b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}_FIX.xml")
                 c_img = st.columns(3)
-                mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Patente Fronte")
-                mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Patente Retro")
-                mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto Firmato")
+                mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Patente F")
+                mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Patente R")
+                mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto")
 
 with t3:
-    st.subheader("🚨 Gestione Multe")
-    t_multe = st.text_input("Targa per rinotifica").upper()
-    if t_multe:
-        r_m = supabase.table("contratti").select("*").eq("targa", t_multe).order("numero_fattura", desc=True).limit(1).execute()
-        if r_m.data:
-            m = r_m.data[0]
-            st.success(f"Trovato ultimo cliente: {m['nome']} {m['cognome']}")
+    st.subheader("🚨 Gestione Multe / Rinotifiche")
+    targa_m = st.text_input("Inserisci Targa per trovare il cliente").upper()
+    if targa_m:
+        res = supabase.table("contratti").select("*").eq("targa", targa_m).order("numero_fattura", desc=True).limit(1).execute()
+        if res.data:
+            c = res.data[0]
+            st.success(f"Ultimo noleggio trovato: {c['nome']} {c['cognome']} (Fattura {c['numero_fattura']})")
+            with st.form("form_multa"):
+                col1, col2 = st.columns(2)
+                v_num = col1.text_input("Numero Verbale")
+                p_num = col2.text_input("Protocollo")
+                com_pol = col1.text_input("Comune/Comando Polizia")
+                data_i = col2.text_input("Data Infrazione")
+                f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
+                if st.form_submit_button("📦 GENERA PDF COMPLETO"):
+                    pdf_bytes = genera_pdf_multe(c, v_num, p_num, com_pol, data_i, f_verbale)
+                    st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}_{v_num}.pdf")
+        else:
+            st.warning("Nessun contratto trovato per questa targa.")
