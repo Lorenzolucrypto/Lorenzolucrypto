@@ -23,8 +23,7 @@ supabase: Client = create_client(URL, KEY)
 # --- UTILITY ---
 def safe(t):
     if t is None or str(t).strip() == "" or str(t).lower() == "none": 
-        return "DATO ASSENTE"
-    # Pulizia caratteri per XML SDI
+        return "DATO MANCANTE"
     t = str(t).replace("&", " e ").replace("<", " ").replace(">", " ").replace('"', " ").replace("'", " ")
     return t.encode("ascii", "ignore").decode("ascii").upper()
 
@@ -39,42 +38,40 @@ def correggi_e_converti_foto(image_file):
         except Exception: return None
     return None
 
+def mostra_foto_base64(colonna, base64_str, titolo=""):
+    if base64_str and "base64," in base64_str:
+        try:
+            img_data = base64.b64decode(base64_str.split("base64,")[1])
+            colonna.image(img_data, caption=titolo, use_container_width=True)
+        except:
+            colonna.error(f"Errore caricamento {titolo}")
+    else:
+        colonna.info(f"{titolo} non presente")
+
 def get_prossimo_numero():
     try:
-        # Cerca il numero più alto nel database per suggerire il prossimo
         res = supabase.table("contratti").select("numero_fattura").order("numero_fattura", desc=True).limit(1).execute()
         if res.data:
-            ultimo_num = int(res.data[0]['numero_fattura'])
-            return ultimo_num + 1
+            return int(res.data[0]['numero_fattura']) + 1
         return 1
     except: return 1
 
-# --- GENERATORE XML (SCORPORO IVA + ANTI-SCARTO) ---
+# --- GENERATORE XML ---
 def genera_xml_sdi(c, forza_straniero=False):
     data_xml = datetime.now().strftime('%Y-%m-%d')
     cf_originale = str(c.get('codice_fiscale', '')).upper().replace(" ", "")
-    
-    # SCORPORO IVA (Tu inserisci il totale, lui calcola l'imponibile)
     prezzo_totale = float(c.get('prezzo', 0))
     imponibile = round(prezzo_totale / 1.22, 2)
     imposta = round(prezzo_totale - imponibile, 2)
 
-    # GESTIONE DATI CLIENTE
-    if forza_straniero:
-        # Modalità emergenza: Cliente Estero (OO) con 11 zeri
+    if forza_straniero or len(cf_originale) != 16:
         cf_blocco = "<CodiceFiscale>00000000000</CodiceFiscale>"
         nazione_blocco = "OO"
         cap_blocco = "00000"
-    elif len(cf_originale) == 16:
-        # Italiano standard
+    else:
         cf_blocco = f"<CodiceFiscale>{cf_originale}</CodiceFiscale>"
         nazione_blocco = "IT"
         cap_blocco = str(c.get('cap', '80075'))[:5]
-    else:
-        # Fallback se il CF è incompleto
-        cf_blocco = "<CodiceFiscale>00000000000</CodiceFiscale>"
-        nazione_blocco = "OO"
-        cap_blocco = "00000"
 
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <p:FatturaElettronica versione="FPR12" xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2">
@@ -127,7 +124,7 @@ def genera_xml_sdi(c, forza_straniero=False):
 </p:FatturaElettronica>"""
     return xml.encode('utf-8')
 
-# --- INTERFACCIA STREAMLIT ---
+# --- INTERFACCIA ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
 if "auth" not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
@@ -136,46 +133,69 @@ if not st.session_state.auth:
         if pwd == "1234": st.session_state.auth = True; st.rerun()
     st.stop()
 
-t1, t2, t3 = st.tabs(["📝 NUOVO CONTRATTO", "📂 ARCHIVIO", "🚨 MULTE"])
+t1, t2, t3 = st.tabs(["📝 NUOVO", "📂 ARCHIVIO", "🚨 MULTE"])
 
 with t1:
     with st.form("f"):
         c1, c2 = st.columns(2)
-        n, cg, cf = c1.text_input("Nome"), c2.text_input("Cognome"), st.text_input("Codice Fiscale")
-        ind, wa = st.text_input("Indirizzo"), st.text_input("WhatsApp (es. 39333...)")
-        com, cap = c1.text_input("Comune", "Forio"), c2.text_input("CAP", "80075")
-        tg, mod = c1.text_input("Targa").upper(), c2.text_input("Modello")
-        prz = st.number_input("Prezzo Totale Incassato €", 0.0)
-        f1, f2, f3 = st.file_uploader("Patente Fronte"), st.file_uploader("Patente Retro"), st.file_uploader("Contratto Firmato")
-        if st.form_submit_button("💾 SALVA E GENERA NUMERO"):
+        n = c1.text_input("Nome")
+        cg = c2.text_input("Cognome")
+        cf = st.text_input("Codice Fiscale")
+        ind = st.text_input("Indirizzo di residenza")
+        c3, c4 = st.columns(2)
+        com = c3.text_input("Comune", "Forio")
+        cap = c4.text_input("CAP", "80075")
+        wa = st.text_input("Numero WhatsApp (per invio contratto)")
+        st.write("---")
+        c5, c6 = st.columns(2)
+        tg = c5.text_input("Targa").upper()
+        mod = c6.text_input("Modello Scooter")
+        prz = st.number_input("Totale Incassato € (IVA inclusa)", 0.0)
+        st.write("---")
+        f1 = st.file_uploader("Foto Patente Fronte")
+        f2 = st.file_uploader("Foto Patente Retro")
+        f3 = st.file_uploader("Foto Contratto Firmato")
+        
+        if st.form_submit_button("💾 SALVA CONTRATTO"):
             nf = get_prossimo_numero()
             d = {"nome":n,"cognome":cg,"codice_fiscale":cf,"indirizzo":ind,"comune":com,"cap":cap,"targa":tg,"modello":mod,"prezzo":prz,"pec":wa,"numero_fattura":nf,"data_inizio":datetime.now().strftime("%d/%m/%Y"),"foto_patente":correggi_e_converti_foto(f1),"foto_patente_retro":correggi_e_converti_foto(f2),"firma":correggi_e_converti_foto(f3)}
             supabase.table("contratti").insert(d).execute()
-            st.success(f"Contratto salvato con Fattura n. {nf}")
+            st.success(f"Salvato con successo! Numero fattura assegnato: {nf}")
 
 with t2:
     cerca = st.text_input("🔍 Cerca per targa o cognome")
     res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec").order("numero_fattura", desc=True).execute()
     for r in res.data:
         if cerca.lower() in f"{r['targa']} {r['cognome']}".lower():
-            with st.expander(f"📄 Fattura {r['numero_fattura']} - {r['targa']} ({r['cognome']})"):
+            with st.expander(f"📄 Fattura {r['numero_fattura']} - {r['nome']} {r['cognome']} ({r['targa']})"):
+                # Recupero tutti i dati per le foto
                 dati = supabase.table("contratti").select("*").eq("id", r['id']).single().execute()
                 rc = dati.data
-                bt1, bt2 = st.columns(2)
-                bt1.download_button("📩 Scarica XML", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
-                bt2.download_button("🚨 FIX (Se Aruba dà errore)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}FIX.xml", key=f"f{r['id']}")
                 
-                wa_link = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
-                if wa_link:
-                    st.link_button("💬 Invia Messaggio WhatsApp", f"https://wa.me/{wa_link}")
+                col_btn1, col_btn2 = st.columns(2)
+                col_btn1.download_button("📩 XML Standard", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"s_{r['id']}")
+                col_btn2.download_button("🚨 XML FIX (Emergenza)", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}FIX.xml", key=f"f{r['id']}")
+                
+                st.write(f"*Indirizzo:* {rc.get('indirizzo','')}, {rc.get('comune','')} ({rc.get('cap','')})")
+                st.write(f"*Codice Fiscale:* {rc.get('codice_fiscale','')}")
+                
+                num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
+                if num_wa:
+                    st.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}")
+                
+                st.write("---")
+                # Sezione Foto
+                st.subheader("Immagini caricate")
+                c_img = st.columns(3)
+                mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Patente Fronte")
+                mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Patente Retro")
+                mostra_foto_base64(c_img[2], rc.get("firma"), "Contratto Firmato")
 
 with t3:
     st.subheader("🚨 Gestione Multe")
-    t_multe = st.text_input("Inserisci targa per rinotifica").upper()
+    t_multe = st.text_input("Targa per rinotifica").upper()
     if t_multe:
-        r_m = supabase.table("contratti").select("*").eq("targa", t_multe).order("id", desc=True).limit(1).execute()
+        r_m = supabase.table("contratti").select("*").eq("targa", t_multe).order("numero_fattura", desc=True).limit(1).execute()
         if r_m.data:
             m = r_m.data[0]
-            st.info(f"Veicolo associato a: {m['nome']} {m['cognome']}")
-            if st.button("📄 Genera Dichiarazione"):
-                st.write("Funzione in fase di stampa...")
+            st.success(f"Trovato ultimo cliente: {m['nome']} {m['cognome']}")
