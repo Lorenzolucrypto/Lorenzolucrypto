@@ -106,7 +106,6 @@ def genera_pdf_multe(contratto, v_n, p_n, com_p, data_inf, foto_verbale):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     
-    # Pagina 1: Dati e Testo
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, "COMUNICAZIONE DATI CONDUCENTE / RINOTIFICA", ln=True, align="C")
@@ -129,7 +128,6 @@ def genera_pdf_multe(contratto, v_n, p_n, com_p, data_inf, foto_verbale):
     pdf.set_font("Arial", "", 12)
     pdf.multi_cell(0, 8, f"Nome e Cognome: {contratto['nome']} {contratto['cognome']}\nCodice Fiscale: {contratto['codice_fiscale']}\nIndirizzo: {contratto['indirizzo']}, {contratto['comune']} ({contratto['cap']})")
     
-    # Aggiunta Foto nel PDF
     def add_b64_img(b64_str, titolo):
         if b64_str and "base64," in b64_str:
             try:
@@ -147,12 +145,14 @@ def genera_pdf_multe(contratto, v_n, p_n, com_p, data_inf, foto_verbale):
     add_b64_img(contratto.get("firma"), "CONTRATTO FIRMATO")
     
     if foto_verbale:
-        pdf.add_page()
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 10, "FOTO VERBALE", ln=True)
-        pdf.image(foto_verbale, x=10, y=30, w=180)
+        try:
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "FOTO VERBALE", ln=True)
+            pdf.image(foto_verbale, x=10, y=30, w=180)
+        except: pass
 
-    return pdf.output(dest="S").encode("latin-1")
+    return pdf.output(dest="S").encode("latin-1", "replace")
 
 # --- INTERFACCIA ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
@@ -188,8 +188,17 @@ with t2:
         if cerca.lower() in f"{rc['targa']} {rc['cognome']}".lower():
             with st.expander(f"📄 Fat. {rc['numero_fattura']} - {rc['nome']} {rc['cognome']} ({rc['targa']})"):
                 b1, b2 = st.columns(2)
-                b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml")
-                b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}_FIX.xml")
+                # Fix ID Duplicato: Aggiunto parametro key univoco basato sull'ID del database
+                b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"xml_std_{rc['id']}")
+                b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}FIX.xml", key=f"xml_fix{rc['id']}")
+                
+                st.write(f"*Indirizzo:* {rc.get('indirizzo','')}, {rc.get('comune','')} ({rc.get('cap','')})")
+                st.write(f"*Codice Fiscale:* {rc.get('codice_fiscale','')}")
+                
+                num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
+                if num_wa: st.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}")
+                
+                st.write("---")
                 c_img = st.columns(3)
                 mostra_foto_base64(c_img[0], rc.get("foto_patente"), "Patente F")
                 mostra_foto_base64(c_img[1], rc.get("foto_patente_retro"), "Patente R")
@@ -212,6 +221,7 @@ with t3:
                 f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
                 if st.form_submit_button("📦 GENERA PDF COMPLETO"):
                     pdf_bytes = genera_pdf_multe(c, v_num, p_num, com_pol, data_i, f_verbale)
-                    st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}_{v_num}.pdf")
+                    # Fix ID Duplicato: Aggiunto parametro key univoco anche qui
+                    st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}{v_num}.pdf", key=f"dl_multa{c['id']}")
         else:
             st.warning("Nessun contratto trovato per questa targa.")
