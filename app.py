@@ -58,7 +58,7 @@ def get_prossimo_numero():
 def genera_xml_sdi(c, forza_straniero=False):
     data_xml = datetime.now().strftime('%Y-%m-%d')
     cf_originale = str(c.get('codice_fiscale', '')).upper().replace(" ", "")
-    prezzo_totale = float(c.get('prezzo', 0))
+    prezzo_totale = float(c.get('prezzo', 0) if c.get('prezzo') is not None else 0)
     imponibile = round(prezzo_totale / 1.22, 2)
     imposta = round(prezzo_totale - imponibile, 2)
 
@@ -87,7 +87,7 @@ def genera_xml_sdi(c, forza_straniero=False):
         <CessionarioCommittente>
             <DatiAnagrafici>
                 {cf_blocco}
-                <Anagrafica><Nome>{safe(c['nome'])}</Nome><Cognome>{safe(c['cognome'])}</Cognome></Anagrafica>
+                <Anagrafica><Nome>{safe(c.get('nome', ''))}</Nome><Cognome>{safe(c.get('cognome', ''))}</Cognome></Anagrafica>
             </DatiAnagrafici>
             <Sede><Indirizzo>{safe(c.get('indirizzo','VIA COGNOLE'))}</Indirizzo><CAP>{cap_blocco}</CAP><Comune>{safe(c.get('comune','FORIO'))}</Comune><Nazione>{nazione_blocco}</Nazione></Sede>
         </CessionarioCommittente>
@@ -120,13 +120,13 @@ def genera_pdf_multe(contratto, v_n, p_n, com_p, data_inf, foto_verbale):
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 10, "DATI NOLEGGIATORE (BATTAGLIA RENT):", ln=True)
     pdf.set_font("Arial", "", 12)
-    pdf.multi_cell(0, 8, f"Targa Veicolo: {contratto['targa']}\nModello: {contratto['modello']}")
+    pdf.multi_cell(0, 8, f"Targa Veicolo: {contratto.get('targa', 'NON INDICATA')}\nModello: {contratto.get('modello', 'NON INDICATO')}")
     pdf.ln(5)
 
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 10, "DATI CONDUCENTE:", ln=True)
     pdf.set_font("Arial", "", 12)
-    pdf.multi_cell(0, 8, f"Nome e Cognome: {contratto['nome']} {contratto['cognome']}\nCodice Fiscale: {contratto['codice_fiscale']}\nIndirizzo: {contratto['indirizzo']}, {contratto['comune']} ({contratto['cap']})")
+    pdf.multi_cell(0, 8, f"Nome e Cognome: {contratto.get('nome', '')} {contratto.get('cognome', '')}\nCodice Fiscale: {contratto.get('codice_fiscale', '')}\nIndirizzo: {contratto.get('indirizzo', '')}, {contratto.get('comune', '')} ({contratto.get('cap', '')})")
     
     def add_b64_img(b64_str, titolo):
         if b64_str and "base64," in b64_str:
@@ -191,11 +191,15 @@ with t2:
     cerca = st.text_input("🔍 Cerca")
     res = supabase.table("contratti").select("*").order("numero_fattura", desc=True).execute()
     for rc in res.data:
-        if cerca.lower() in f"{rc['targa']} {rc['cognome']}".lower():
-            with st.expander(f"📄 Fat. {rc['numero_fattura']} - {rc['nome']} {rc['cognome']} ({rc['targa']})"):
+        # PROTEZIONE CASI VUOTI: usiamo .get() con fallback a stringa vuota per evitare il crash
+        targa_sicura = str(rc.get('targa', '')) if rc.get('targa') is not None else ''
+        cognome_sicuro = str(rc.get('cognome', '')) if rc.get('cognome') is not None else ''
+        
+        if cerca.lower() in f"{targa_sicura} {cognome_sicuro}".lower():
+            with st.expander(f"📄 Fat. {rc.get('numero_fattura', 'N/D')} - {rc.get('nome', '')} {cognome_sicuro} ({targa_sicura})"):
                 b1, b2 = st.columns(2)
-                b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"xml_std_{rc['id']}")
-                b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}FIX.xml", key=f"xml_fix{rc['id']}")
+                b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc.get('numero_fattura', '1')}.xml", key=f"xml_std_{rc['id']}")
+                b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc.get('numero_fattura', '1')}FIX.xml", key=f"xml_fix{rc['id']}")
                 
                 st.write(f"*Indirizzo:* {rc.get('indirizzo','')}, {rc.get('comune','')} ({rc.get('cap','')})")
                 st.write(f"*Codice Fiscale:* {rc.get('codice_fiscale','')}")
@@ -216,7 +220,7 @@ with t3:
         res = supabase.table("contratti").select("*").eq("targa", targa_m).order("numero_fattura", desc=True).limit(1).execute()
         if res.data:
             c = res.data[0]
-            st.success(f"Ultimo noleggio trovato: {c['nome']} {c['cognome']} (Fattura {c['numero_fattura']})")
+            st.success(f"Ultimo noleggio trovato: {c.get('nome', '')} {c.get('cognome', '')} (Fattura {c.get('numero_fattura', 'N/D')})")
             with st.form("form_multa"):
                 col1, col2 = st.columns(2)
                 v_num = col1.text_input("Numero Verbale")
