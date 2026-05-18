@@ -156,17 +156,22 @@ def genera_pdf_multe(contratto, v_n, p_n, com_p, data_inf, foto_verbale):
 
 # --- INTERFACCIA ---
 st.set_page_config(page_title="BATTAGLIA RENT", layout="centered")
-if "auth" not in st.session_state: st.session_state.auth = False
+
+if "auth" not in st.session_state: 
+    st.session_state.auth = False
+
 if not st.session_state.auth:
     pwd = st.text_input("Password", type="password")
     if st.button("ACCEDI"):
-        if pwd == "1234": st.session_state.auth = True; st.rerun()
+        if pwd == "1234": 
+            st.session_state.auth = True
+            st.rerun()
     st.stop()
 
 t1, t2, t3 = st.tabs(["📝 NUOVO", "📂 ARCHIVIO", "🚨 MULTE"])
 
 with t1:
-    with st.form("f"):
+    with st.form("f", clear_on_submit=False):
         c1, c2 = st.columns(2)
         n, cg, cf = c1.text_input("Nome"), c2.text_input("Cognome"), st.text_input("Codice Fiscale")
         ind, wa = st.text_input("Indirizzo"), st.text_input("WhatsApp")
@@ -175,11 +180,12 @@ with t1:
         tg, mod = c3.text_input("Targa").upper(), c4.text_input("Modello")
         prz = st.number_input("Totale €", 0.0)
         f1, f2, f3 = st.file_uploader("Patente F"), st.file_uploader("Patente R"), st.file_uploader("Contratto")
+        
         if st.form_submit_button("💾 SALVA"):
             nf = get_prossimo_numero()
             d = {"nome":n,"cognome":cg,"codice_fiscale":cf,"indirizzo":ind,"comune":com,"cap":cap,"targa":tg,"modello":mod,"prezzo":prz,"pec":wa,"numero_fattura":nf,"data_inizio":datetime.now().strftime("%d/%m/%Y"),"foto_patente":correggi_e_converti_foto(f1),"foto_patente_retro":correggi_e_converti_foto(f2),"firma":correggi_e_converti_foto(f3)}
             supabase.table("contratti").insert(d).execute()
-            st.success(f"Salvato! Fattura n. {nf}")
+            st.success(f"Salvato con successo! Fattura n. {nf}")
 
 with t2:
     cerca = st.text_input("🔍 Cerca")
@@ -188,7 +194,6 @@ with t2:
         if cerca.lower() in f"{rc['targa']} {rc['cognome']}".lower():
             with st.expander(f"📄 Fat. {rc['numero_fattura']} - {rc['nome']} {rc['cognome']} ({rc['targa']})"):
                 b1, b2 = st.columns(2)
-                # Fix ID Duplicato: Aggiunto parametro key univoco basato sull'ID del database
                 b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc['numero_fattura']}.xml", key=f"xml_std_{rc['id']}")
                 b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc['numero_fattura']}FIX.xml", key=f"xml_fix{rc['id']}")
                 
@@ -221,7 +226,6 @@ with t3:
                 f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
                 if st.form_submit_button("📦 GENERA PDF COMPLETO"):
                     pdf_bytes = genera_pdf_multe(c, v_num, p_num, com_pol, data_i, f_verbale)
-                    # Fix ID Duplicato: Aggiunto parametro key univoco anche qui
                     st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}{v_num}.pdf", key=f"dl_multa{c['id']}")
         else:
             st.warning("Nessun contratto trovato per questa targa.")
