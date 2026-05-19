@@ -49,8 +49,15 @@ def mostra_foto_base64(colonna, base64_str, titolo=""):
 
 def get_prossimo_numero():
     try:
-        res = supabase.table("contratti").select("numero_fattura").order("numero_fattura", desc=True).limit(1).execute()
-        if res.data: return int(res.data[0]['numero_fattura']) + 1
+        # Recupera tutti i numeri per calcolare il vero massimo matematico in Python
+        res = supabase.table("contratti").select("numero_fattura").execute()
+        if res.data:
+            nums = []
+            for r in res.data:
+                val = r.get('numero_fattura')
+                if val is not None and str(val).isdigit():
+                    nums.append(int(val))
+            return max(nums) + 1 if nums else 1
         return 1
     except: return 1
 
@@ -191,7 +198,6 @@ with t2:
     cerca = st.text_input("🔍 Cerca")
     res = supabase.table("contratti").select("*").order("numero_fattura", desc=True).execute()
     for rc in res.data:
-        # PROTEZIONE CASI VUOTI: usiamo .get() con fallback a stringa vuota per evitare il crash
         targa_sicura = str(rc.get('targa', '')) if rc.get('targa') is not None else ''
         cognome_sicuro = str(rc.get('cognome', '')) if rc.get('cognome') is not None else ''
         
@@ -215,21 +221,30 @@ with t2:
 
 with t3:
     st.subheader("🚨 Gestione Multe / Rinotifiche")
-    targa_m = st.text_input("Inserisci Targa per trovare il cliente").upper()
+    targa_m = st.text_input("Inserisci Targa per trovare i contratti", key="targa_multe_input").upper()
     if targa_m:
-        res = supabase.table("contratti").select("*").eq("targa", targa_m).order("numero_fattura", desc=True).limit(1).execute()
-        if res.data:
-            c = res.data[0]
-            st.success(f"Ultimo noleggio trovato: {c.get('nome', '')} {c.get('cognome', '')} (Fattura {c.get('numero_fattura', 'N/D')})")
-            with st.form("form_multa"):
-                col1, col2 = st.columns(2)
-                v_num = col1.text_input("Numero Verbale")
-                p_num = col2.text_input("Protocollo")
-                com_pol = col1.text_input("Comune/Comando Polizia")
-                data_i = col2.text_input("Data Infrazione")
-                f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
-                if st.form_submit_button("📦 GENERA PDF COMPLETO"):
-                    pdf_bytes = genera_pdf_multe(c, v_num, p_num, com_pol, data_i, f_verbale)
-                    st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}{v_num}.pdf", key=f"dl_multa{c['id']}")
+        res_m = supabase.table("contratti").select("*").eq("targa", targa_m).order("numero_fattura", desc=True).execute()
+        if res_m.data:
+            st.success(f"Trovati {len(res_m.data)} contratti associati alla targa {targa_m}")
+            
+            # Menu a tendina per scegliere quale contratto associare alla multa
+            contratto_scelto = st.selectbox(
+                "Seleziona il noleggio corretto:",
+                res_m.data,
+                format_func=lambda x: f"Fattura {x.get('numero_fattura', 'N/D')} - {x.get('nome', '')} {x.get('cognome', '')} (Inizio: {x.get('data_inizio', 'N/D')})",
+                key="select_contratto_multa"
+            )
+            
+            if contratto_scelto:
+                with st.form("form_multa"):
+                    col1, col2 = st.columns(2)
+                    v_num = col1.text_input("Numero Verbale")
+                    p_num = col2.text_input("Protocollo")
+                    com_pol = col1.text_input("Comune/Comando Polizia")
+                    data_i = col2.text_input("Data Infrazione")
+                    f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
+                    if st.form_submit_button("📦 GENERA PDF COMPLETO"):
+                        pdf_bytes = genera_pdf_multe(contratto_scelto, v_num, p_num, com_pol, data_i, f_verbale)
+                        st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}{v_num}.pdf", key=f"dl_multa{contratto_scelto['id']}")
         else:
             st.warning("Nessun contratto trovato per questa targa.")
