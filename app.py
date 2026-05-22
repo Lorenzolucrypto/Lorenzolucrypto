@@ -31,10 +31,16 @@ def correggi_e_converti_foto(image_file):
         try:
             img = Image.open(image_file)
             img = ImageOps.exif_transpose(img)
+            
+            # Ridimensionamento proporzionale per evitare payload mastodontici e crash di memoria
+            max_dim = 1000
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+            
             buffered = io.BytesIO()
             img.save(buffered, format="JPEG", quality=70)
             return "data:image/jpeg;base64," + base64.b64encode(buffered.getvalue()).decode()
-        except Exception: return None
+        except Exception: 
+            return None
     return None
 
 def mostra_foto_base64(colonna, base64_str, titolo=""):
@@ -91,13 +97,13 @@ def genera_xml_sdi(c, forza_straniero=False):
             </DatiAnagrafici>
             <Sede><Indirizzo>{SEDE_VIA}</Indirizzo><CAP>{SEDE_CAP}</CAP><Comune>{SEDE_COMUNE}</Comune><Provincia>{SEDE_PROV}</Provincia><Nazione>IT</Nazione></Sede>
         </CedentePrestatore>
-        <CessionarioCommittente>
+        <CcessionarioCommittente>
             <DatiAnagrafici>
                 {cf_blocco}
                 <Anagrafica><Nome>{safe(c.get('nome', ''))}</Nome><Cognome>{safe(c.get('cognome', ''))}</Cognome></Anagrafica>
             </DatiAnagrafici>
             <Sede><Indirizzo>{safe(c.get('indirizzo','VIA COGNOLE'))}</Indirizzo><CAP>{cap_blocco}</CAP><Comune>{safe(c.get('comune','FORIO'))}</Comune><Nazione>{nazione_blocco}</Nazione></Sede>
-        </CessionarioCommittente>
+        </CcessionarioCommittente>
     </FatturaElettronicaHeader>
     <FatturaElettronicaBody>
         <DatiGenerali><DatiGeneraliDocumento><TipoDocumento>TD01</TipoDocumento><Divisa>EUR</Divisa><Data>{data_xml}</Data><Numero>{c.get('numero_fattura', '1')}</Numero></DatiGeneraliDocumento></DatiGenerali>
@@ -189,14 +195,43 @@ with t1:
         f1, f2, f3 = st.file_uploader("Patente F"), st.file_uploader("Patente R"), st.file_uploader("Contratto")
         
         if st.form_submit_button("💾 SALVA"):
-            nf = get_prossimo_numero()
-            d = {"nome":n,"cognome":cg,"codice_fiscale":cf,"indirizzo":ind,"comune":com,"cap":cap,"targa":tg,"modello":mod,"prezzo":prz,"pec":wa,"numero_fattura":nf,"data_inizio":datetime.now().strftime("%d/%m/%Y"),"foto_patente":correggi_e_converti_foto(f1),"foto_patente_retro":correggi_e_converti_foto(f2),"firma":correggi_e_converti_foto(f3)}
-            supabase.table("contratti").insert(d).execute()
-            st.success(f"Salvato con successo! Fattura n. {nf}")
+            if not n or not cg:
+                st.warning("⚠️ Nome e Cognome sono obbligatori per salvare.")
+            else:
+                try:
+                    with st.spinner("Compressione immagini e salvataggio nel database..."):
+                        nf = get_prossimo_numero()
+                        
+                        # Elaborazione controllata e alleggerita delle immagini
+                        f1_b64 = correggi_e_converti_foto(f1)
+                        f2_b64 = correggi_e_converti_foto(f2)
+                        f3_b64 = correggi_e_converti_foto(f3)
+                        
+                        d = {
+                            "nome": n,
+                            "cognome": cg,
+                            "codice_fiscale": cf,
+                            "indirizzo": ind,
+                            "comune": com,
+                            "cap": cap,
+                            "targa": tg,
+                            "modello": mod,
+                            "prezzo": prz,
+                            "pec": wa,
+                            "numero_fattura": nf,
+                            "data_inizio": datetime.now().strftime("%d/%m/%Y"),
+                            "foto_patente": f1_b64,
+                            "foto_patente_retro": f2_b64,
+                            "firma": f3_b64
+                        }
+                        
+                        supabase.table("contratti").insert(d).execute()
+                        st.success(f"🎉 Salvato con successo! Fattura n. {nf}")
+                except Exception as db_err:
+                    st.error(f"❌ Impossibile salvare il contratto. Errore di connessione: {str(db_err)}")
 
 with t2:
     cerca = st.text_input("🔍 Cerca")
-    # Ottimizzazione: Selezioniamo solo i campi di testo per non sovraccaricare il database
     res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec, indirizzo, comune, cap, codice_fiscale, prezzo").order("numero_fattura", desc=True).execute()
     
     if isinstance(res.data, list):
@@ -219,7 +254,6 @@ with t2:
                     
                     st.write("---")
                     
-                    # Caricamento On-Demand delle immagini solo se esplicitamente richiesto
                     if st.checkbox("👁️ Carica Foto e Firma", key=f"load_pics_{rc['id']}"):
                         with st.spinner("Scaricamento immagini in corso..."):
                             img_res = supabase.table("contratti").select("foto_patente, foto_patente_retro, firma").eq("id", rc['id']).single().execute()
@@ -235,7 +269,6 @@ with t3:
     st.subheader("🚨 Gestione Multe / Rinotifiche")
     targa_m = st.text_input("Inserisci Targa per trovare i contratti", key="targa_multe_input").upper()
     if targa_m:
-        # Ottimizzazione: escludiamo le immagini pesanti anche dalla ricerca multe
         res_m = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, data_inizio, modello, codice_fiscale, indirizzo, comune, cap").eq("targa", targa_m).order("numero_fattura", desc=True).execute()
         if isinstance(res_m.data, list) and res_m.data:
             st.success(f"Trovati {len(res_m.data)} contratti associati alla targa {targa_m}")
@@ -257,7 +290,6 @@ with t3:
                     f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
                     if st.form_submit_button("📦 GENERA PDF COMPLETO"):
                         with st.spinner("Recupero immagini per il PDF..."):
-                            # Scarichiamo le immagini solo per il singolo contratto selezionato per comporre il PDF
                             img_multa_res = supabase.table("contratti").select("foto_patente, foto_patente_retro, firma").eq("id", contratto_scelto['id']).single().execute()
                             contratto_completo = contratto_scelto.copy()
                             if img_multa_res.data and isinstance(img_multa_res.data, dict):
