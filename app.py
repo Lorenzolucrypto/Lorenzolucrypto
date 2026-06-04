@@ -96,13 +96,13 @@ def genera_xml_sdi(c, forza_straniero=False):
             </DatiAnagrafici>
             <Sede><Indirizzo>{SEDE_VIA}</Indirizzo><CAP>{SEDE_CAP}</CAP><Comune>{SEDE_COMUNE}</Comune><Provincia>{SEDE_PROV}</Provincia><Nazione>IT</Nazione></Sede>
         </CedentePrestatore>
-        <CessionarioCommittente>
+        <CcessionarioCommittente>
             <DatiAnagrafici>
                 {cf_blocco}
                 <Anagrafica><Nome>{safe(c.get('nome', ''))}</Nome><Cognome>{safe(c.get('cognome', ''))}</Cognome></Anagrafica>
             </DatiAnagrafici>
             <Sede><Indirizzo>{safe(c.get('indirizzo','VIA COGNOLE'))}</Indirizzo><CAP>{cap_blocco}</CAP><Comune>{safe(c.get('comune','FORIO'))}</Comune><Nazione>{nazione_blocco}</Nazione></Sede>
-        </CessionarioCommittente>
+        </CcessionarioCommittente>
     </FatturaElettronicaHeader>
     <FatturaElettronicaBody>
         <DatiGenerali><DatiGeneraliDocumento><TipoDocumento>TD01</TipoDocumento><Divisa>EUR</Divisa><Data>{data_xml}</Data><Numero>{c.get('numero_fattura', '1')}</Numero></DatiGeneraliDocumento></DatiGenerali>
@@ -192,7 +192,6 @@ with t1:
         tg, mod = c3.text_input("Targa").upper(), c4.text_input("Modello")
         prz = st.number_input("Totale €", 0.0)
         
-        # Selezione manuale e precisa delle date di noleggio
         col_d1, col_d2 = st.columns(2)
         data_in_input = col_d1.date_input("Data Inizio Noleggio", datetime.now())
         data_fi_input = col_d2.date_input("Data Fine Noleggio", datetime.now())
@@ -233,77 +232,84 @@ with t1:
                         supabase.table("contratti").insert(d).execute()
                         st.success(f"🎉 Salvato con successo! Fattura n. {nf}")
                 except Exception as db_err:
-                    st.error(f"❌ Impossibile salvare il contratto. Errore di connessione: {str(db_err)}")
+                    st.error(f"❌ Errore di connessione o colonna mancante nel Database. Verifica i nomi delle colonne su Supabase. Dettaglio: {str(db_err)}")
 
 with t2:
     cerca = st.text_input("🔍 Cerca")
-    res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec, indirizzo, comune, cap, codice_fiscale, prezzo, data_inizio, data_fine").order("numero_fattura", desc=True).execute()
     
-    if isinstance(res.data, list):
-        for rc in res.data:
-            if not isinstance(rc, dict): continue
-            targa_sicura = str(rc.get('targa', '')) if rc.get('targa') is not None else ''
-            cognome_sicuro = str(rc.get('cognome', '')) if rc.get('cognome') is not None else ''
-            
-            if cerca.lower() in f"{targa_sicura} {cognome_sicuro}".lower():
-                with st.expander(f"📄 Fat. {rc.get('numero_fattura', 'N/D')} - {rc.get('nome', '')} {cognome_sicuro} ({targa_sicura})"):
-                    b1, b2 = st.columns(2)
-                    b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc.get('numero_fattura', '1')}.xml", key=f"xml_std_{rc['id']}")
-                    b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc.get('numero_fattura', '1')}FIX.xml", key=f"xml_fix{rc['id']}")
-                    
-                    st.write(f"*Periodo Noleggio:* Dal {rc.get('data_inizio','N/D')} Al {rc.get('data_fine','N/D')}")
-                    st.write(f"*Indirizzo:* {rc.get('indirizzo','')}, {rc.get('comune','')} ({rc.get('cap','')})")
-                    st.write(f"*Codice Fiscale:* {rc.get('codice_fiscale','')}")
-                    
-                    num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
-                    if num_wa: st.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}")
-                    
-                    st.write("---")
-                    
-                    if st.checkbox("👁️ Carica Foto e Firma", key=f"load_pics_{rc['id']}"):
-                        with st.spinner("Scaricamento immagini in corso..."):
-                            img_res = supabase.table("contratti").select("foto_patente, foto_patente_retro, firma").eq("id", rc['id']).single().execute()
-                            if img_res.data and isinstance(img_res.data, dict):
-                                c_img = st.columns(3)
-                                mostra_foto_base64(c_img[0], img_res.data.get("foto_patente"), "Patente F")
-                                mostra_foto_base64(c_img[1], img_res.data.get("foto_patente_retro"), "Patente R")
-                                mostra_foto_base64(c_img[2], img_res.data.get("firma"), "Contratto")
-    else:
-        st.error("Errore nel recupero dell'archivio dal database.")
+    try:
+        res = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, pec, indirizzo, comune, cap, codice_fiscale, prezzo, data_inizio, data_fine").order("numero_fattura", desc=True).execute()
+        
+        if isinstance(res.data, list):
+            for rc in res.data:
+                if not isinstance(rc, dict): continue
+                targa_sicura = str(rc.get('targa', '')) if rc.get('targa') is not None else ''
+                cognome_sicuro = str(rc.get('cognome', '')) if rc.get('cognome') is not None else ''
+                
+                if cerca.lower() in f"{targa_sicura} {cognome_sicuro}".lower():
+                    with st.expander(f"📄 Fat. {rc.get('numero_fattura', 'N/D')} - {rc.get('nome', '')} {cognome_sicuro} ({targa_sicura})"):
+                        b1, b2 = st.columns(2)
+                        b1.download_button("📩 XML", genera_xml_sdi(rc), f"Fat_{rc.get('numero_fattura', '1')}.xml", key=f"xml_std_{rc['id']}")
+                        b2.download_button("🚨 FIX", genera_xml_sdi(rc, True), f"Fat_{rc.get('numero_fattura', '1')}FIX.xml", key=f"xml_fix{rc['id']}")
+                        
+                        st.write(f"*Periodo Noleggio:* Dal {rc.get('data_inizio','N/D')} Al {rc.get('data_fine','N/D')}")
+                        st.write(f"*Indirizzo:* {rc.get('indirizzo','')}, {rc.get('comune','')} ({rc.get('cap','')})")
+                        st.write(f"*Codice Fiscale:* {rc.get('codice_fiscale','')}")
+                        
+                        num_wa = ''.join(filter(str.isdigit, str(rc.get('pec', ''))))
+                        if num_wa: st.link_button("💬 WhatsApp", f"https://wa.me/{num_wa}")
+                        
+                        st.write("---")
+                        
+                        if st.checkbox("👁️ Carica Foto e Firma", key=f"load_pics_{rc['id']}"):
+                            with st.spinner("Scaricamento immagini in corso..."):
+                                img_res = supabase.table("contratti").select("foto_patente, foto_patente_retro, firma").eq("id", rc['id']).single().execute()
+                                if img_res.data and isinstance(img_res.data, dict):
+                                    c_img = st.columns(3)
+                                    mostra_foto_base64(c_img[0], img_res.data.get("foto_patente"), "Patente F")
+                                    mostra_foto_base64(c_img[1], img_res.data.get("foto_patente_retro"), "Patente R")
+                                    mostra_foto_base64(c_img[2], img_res.data.get("firma"), "Contratto")
+        else:
+            st.error("Errore nel recupero dell'archivio dal database.")
+    except Exception as e:
+        st.error(f"⚠️ Errore di caricamento dall'archivio. Verifica che tutti i campi inseriti nella query esistano su Supabase. Errore: {str(e)}")
 
 with t3:
     st.subheader("🚨 Gestione Multe / Rinotifiche")
     targa_m = st.text_input("Inserisci Targa per trovare i contratti", key="targa_multe_input").upper()
     if targa_m:
-        res_m = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, data_inizio, data_fine, modello, codice_fiscale, indirizzo, comune, cap").eq("targa", targa_m).order("numero_fattura", desc=True).execute()
-        if isinstance(res_m.data, list) and res_m.data:
-            st.success(f"Trovati {len(res_m.data)} contratti associati alla targa {targa_m}")
-            
-            contratto_scelto = st.selectbox(
-                "Seleziona il noleggio corretto:",
-                res_m.data,
-                format_func=lambda x: f"Fattura {x.get('numero_fattura', 'N/D')} - {x.get('nome', '')} {x.get('cognome', '')} (Dal: {x.get('data_inizio', 'N/D')} Al: {x.get('data_fine', 'N/D')})",
-                key="select_contratto_multa"
-            )
-            
-            if contratto_scelto:
-                with st.form("form_multa"):
-                    col1, col2 = st.columns(2)
-                    v_num = col1.text_input("Numero Verbale")
-                    p_num = col2.text_input("Protocollo")
-                    com_pol = col1.text_input("Comune/Comando Polizia")
-                    data_i = col2.text_input("Data Infrazione")
-                    f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
-                    if st.form_submit_button("📦 GENERA PDF COMPLETO"):
-                        with st.spinner("Recupero immagini per il PDF..."):
-                            img_multa_res = supabase.table("contratti").select("foto_patente, foto_patente_retro, firma").eq("id", contratto_scelto['id']).single().execute()
-                            contratto_completo = contratto_scelto.copy()
-                            if img_multa_res.data and isinstance(img_multa_res.data, dict):
-                                contratto_completo.update(img_multa_res.data)
-                        
-                        pdf_bytes = genera_pdf_multe(contratto_completo, v_num, p_num, com_pol, data_i, f_verbale)
-                        st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}{v_num}.pdf", key=f"dl_multa{contratto_scelto['id']}")
-        elif isinstance(res_m.data, list):
-            st.warning("Nessun contratto trovato per questa targa.")
-        else:
-            st.error("Errore nel caricamento dei dati delle multe.")
+        try:
+            res_m = supabase.table("contratti").select("id, nome, cognome, targa, numero_fattura, data_inizio, data_fine, modello, codice_fiscale, indirizzo, comune, cap").eq("targa", targa_m).order("numero_fattura", desc=True).execute()
+            if isinstance(res_m.data, list) and res_m.data:
+                st.success(f"Trovati {len(res_m.data)} contratti associati alla targa {targa_m}")
+                
+                contratto_scelto = st.selectbox(
+                    "Seleziona il noleggio corretto:",
+                    res_m.data,
+                    format_func=lambda x: f"Fattura {x.get('numero_fattura', 'N/D')} - {x.get('nome', '')} {x.get('cognome', '')} (Dal: {x.get('data_inizio', 'N/D')} Al: {x.get('data_fine', 'N/D')})",
+                    key="select_contratto_multa"
+                )
+                
+                if contratto_scelto:
+                    with st.form("form_multa"):
+                        col1, col2 = st.columns(2)
+                        v_num = col1.text_input("Numero Verbale")
+                        p_num = col2.text_input("Protocollo")
+                        com_pol = col1.text_input("Comune/Comando Polizia")
+                        data_i = col2.text_input("Data Infrazione")
+                        f_verbale = st.file_uploader("📸 Foto del Verbale ricevuto")
+                        if st.form_submit_button("📦 GENERA PDF COMPLETO"):
+                            with st.spinner("Recupero immagini per il PDF..."):
+                                img_multa_res = supabase.table("contratti").select("foto_patente, foto_patente_retro, firma").eq("id", contratto_scelto['id']).single().execute()
+                                contratto_completo = contratto_scelto.copy()
+                                if img_multa_res.data and isinstance(img_multa_res.data, dict):
+                                    contratto_completo.update(img_multa_res.data)
+                            
+                            pdf_bytes = genera_pdf_multe(contratto_completo, v_num, p_num, com_pol, data_i, f_verbale)
+                            st.download_button("📥 Scarica Fascicolo Multa", pdf_bytes, f"Multa_{targa_m}{v_num}.pdf", key=f"dl_multa{contratto_scelto['id']}")
+            elif isinstance(res_m.data, list):
+                st.warning("Nessun contratto trovato per questa targa.")
+            else:
+                st.error("Errore nel caricamento dei dati delle multe.")
+        except Exception as e:
+            st.error(f"⚠️ Errore nella ricerca delle multe. Dettaglio: {str(e)}")
